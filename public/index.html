@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>单词麻将 - 联机版</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #2c3e50; color: white; text-align: center; }
+        #game-board { max-width: 800px; margin: 0 auto; }
+        .hand-container { 
+            display: flex; justify-content: center; min-height: 80px; 
+            background: #34495e; padding: 20px; border-radius: 10px; margin-top: 50px;
+        }
+        .tile {
+            width: 40px; height: 60px; background: #ecf0f1; color: #2c3e50;
+            border-radius: 5px; margin: 5px; line-height: 60px; font-size: 24px;
+            font-weight: bold; cursor: grab; border-bottom: 4px solid #bdc3c7;
+        }
+        .discard-pile { height: 100px; margin: 20px; border: 2px dashed #7f8c8d; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 10px; }
+        #controls { margin-top: 20px; visibility: hidden; }
+        .my-turn { border: 2px solid #f1c40f; }
+    </style>
+</head>
+<body>
+    <h1>单词麻将</h1>
+    <div id="status">等待另一名玩家加入...</div>
+    
+    <div class="discard-pile" id="discard-zone">
+        <p>打出的牌：<span id="last-tile">-</span></p>
+    </div>
+
+    <div id="game-board">
+        <div id="my-hand" class="hand-container"></div>
+    </div>
+
+    <div id="controls">
+        <button id="draw-btn">摸牌</button>
+        <button id="win-btn" style="background: #27ae60; color: white;">宣告组句成功</button>
+    </div>
+
+    <div id="peng-modal" style="display:none; background: rgba(0,0,0,0.8); position:fixed; top:0; left:0; width:100%; height:100%; padding-top:200px;">
+        <h2>对方打出了 <span id="peng-tile"></span>，你要碰吗？</h2>
+        <button onclick="respondPeng(true)">碰</button>
+        <button onclick="respondPeng(false)">不碰</button>
+    </div>
+
+    <script>
+        const socket = io();
+        let myHand = [];
+        let isMyTurn = false;
+        let myID = null;
+
+        const handEl = document.getElementById('my-hand');
+        const controlEl = document.getElementById('controls');
+
+        // 初始化拖拽功能
+        new Sortable(handEl, {
+            animation: 150,
+            onEnd: function() {
+                // 更新内部手牌顺序
+                const tiles = Array.from(handEl.children);
+                myHand = tiles.map(t => t.innerText);
+            }
+        });
+
+        socket.on('playerID', id => myID = id);
+
+        socket.on('gameStart', data => {
+            myHand = data.hand;
+            isMyTurn = data.isMyTurn;
+            document.getElementById('status').innerText = isMyTurn ? "你的回合" : "对方回合";
+            renderHand();
+            if(isMyTurn) controlEl.style.visibility = "visible";
+        });
+
+        socket.on('receiveTile', tile => {
+            myHand.push(tile);
+            renderHand();
+            document.getElementById('draw-btn').disabled = true;
+        });
+
+        socket.on('askPeng', tile => {
+            document.getElementById('peng-tile').innerText = tile;
+            document.getElementById('peng-modal').style.display = 'block';
+        });
+
+        socket.on('confirmPeng', tile => {
+            myHand.push(tile);
+            renderHand();
+            isMyTurn = true;
+            document.getElementById('status').innerText = "碰！到你的回合，请出一张牌";
+            controlEl.style.visibility = "visible";
+            document.getElementById('draw-btn').disabled = true;
+        });
+
+        socket.on('yourTurnToDraw', () => {
+            isMyTurn = true;
+            document.getElementById('status').innerText = "你的回合";
+            controlEl.style.visibility = "visible";
+            document.getElementById('draw-btn').disabled = false;
+        });
+
+        socket.on('updateDiscard', tile => {
+            document.getElementById('last-tile').innerText = tile;
+        });
+
+        socket.on('announceWinner', data => {
+            alert(`游戏结束！玩家 ${data.winner + 1} 获胜！\n组成句子：${data.hand.join('')}`);
+            location.reload();
+        });
+
+        function renderHand() {
+            handEl.innerHTML = '';
+            myHand.forEach((letter, index) => {
+                const div = document.createElement('div');
+                div.className = 'tile';
+                div.innerText = letter;
+                div.onclick = () => discard(index);
+                handEl.appendChild(div);
+            });
+        }
+
+        function discard(index) {
+            if (!isMyTurn || myHand.length < 14) return;
+            const tile = myHand.splice(index, 1);
+            renderHand();
+            isMyTurn = false;
+            controlEl.style.visibility = "hidden";
+            document.getElementById('status').innerText = "等待对方响应...";
+            socket.emit('discardTile', tile[0]);
+        }
+
+        document.getElementById('draw-btn').onclick = () => {
+            socket.emit('drawTile');
+        };
+
+        document.getElementById('win-btn').onclick = () => {
+            if (myHand.length === 14) {
+                socket.emit('winDeclaration', myHand);
+            } else {
+                alert("手牌必须为14张才能宣告成功！");
+            }
+        };
+
+        function respondPeng(choice) {
+            document.getElementById('peng-modal').style.display = 'none';
+            socket.emit('pengResponse', choice);
+        }
+    </script>
+</body>
+</html>
